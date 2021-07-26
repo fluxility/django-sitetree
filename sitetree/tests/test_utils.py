@@ -96,13 +96,16 @@ class TestPermissions():
         from sitetree.toolbox import item
 
         with pytest.raises(ValueError):
-            item('root', 'url', access_by_perms='bad name')
+            # Force setup to ensure evaluation
+            item('root', 'url', access_by_perms='bad name').permissions._setup()
 
         with pytest.raises(ValueError):
-            item('root', 'url', access_by_perms='unknown.name')
+            # Force setup to ensure evaluation
+            item('root', 'url', access_by_perms='unknown.name').permissions._setup()
 
         with pytest.raises(ValueError):
-            item('root', 'url', access_by_perms=42.2)
+            # Force setup to ensure evaluation
+            item('root', 'url', access_by_perms=42.2).permissions._setup()
 
     def test_access_restricted(self):
         from sitetree.toolbox import item
