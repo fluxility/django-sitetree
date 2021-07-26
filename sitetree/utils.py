@@ -5,13 +5,13 @@ from typing import Any, Sequence, Type, Union, List, Optional, Tuple
 from django.apps import apps
 from django.contrib.auth.models import Permission
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.functional import cached_property
 from django.utils.module_loading import module_has_submodule
 
 from . import settings
 
 if False:  # pragma: nocover
     from .models import TreeItemBase, TreeBase  # noqa
-
 
 TypePermission = Union[str, int, Permission]
 
@@ -107,56 +107,24 @@ def item(
                 False - user should have any of chosen permissions.
 
     """
-    item_obj = get_tree_item_model()(
-        title=title, url=url, urlaspattern=url_as_pattern,
-        hint=hint, alias=alias, description=description, inmenu=in_menu,
-        insitetree=in_sitetree, inbreadcrumbs=in_breadcrumbs,
-        access_loggedin=access_loggedin, access_guest=access_guest,
-        **kwargs)
 
-    item_obj.id = generate_id_for(item_obj)
-    item_obj.is_dynamic = True
-    item_obj.dynamic_children = []
-
-    cleaned_permissions = []
-    if access_by_perms:
-        # Make permissions a list if currently a single object
-        if not isinstance(access_by_perms, list):
-            access_by_perms = [access_by_perms]
-
-        for perm in access_by_perms:
-            if isinstance(perm, str):
-                # Get permission object from string
-                try:
-                    app, codename = perm.split('.')
-                except ValueError:
-                    raise ValueError(
-                        f'Wrong permission string format: supplied - `{perm}`; '
-                        'expected - `<app_name>.<permission_name>`.')
-
-                try:
-                    perm = Permission.objects.get(codename=codename, content_type__app_label=app)
-
-                except Permission.DoesNotExist:
-                    raise ValueError(f'Permission `{app}.{codename}` does not exist.')
-
-            elif not isinstance(perm, (int, Permission)):
-                raise ValueError('Permissions must be given as strings, ints, or `Permission` instances.')
-
-            cleaned_permissions.append(perm)
-
-    item_obj.permissions = cleaned_permissions or []
-    item_obj.access_perm_type = item_obj.PERM_TYPE_ALL if perms_mode_all else item_obj.PERM_TYPE_ANY
-
-    if item_obj.permissions:
-        item_obj.access_restricted = True
-
-    if children is not None:
-        for child in children:
-            child.parent = item_obj
-            item_obj.dynamic_children.append(child)
-
-    return item_obj
+    return DynamicItem(
+        title=title,
+        url=url,
+        urlaspattern=url_as_pattern,
+        hint=hint,
+        alias=alias,
+        description=description,
+        inmenu=in_menu,
+        insitetree=in_sitetree,
+        inbreadcrumbs=in_breadcrumbs,
+        access_loggedin=access_loggedin,
+        access_guest=access_guest,
+        children=children,
+        access_by_perms=access_by_perms,
+        perms_mode_all=perms_mode_all,
+        **kwargs,
+    )
 
 
 def import_app_sitetree_module(app: str) -> Optional[ModuleType]:
@@ -237,3 +205,61 @@ def get_tree_model() -> Type['TreeBase']:
 def get_tree_item_model() -> Type['TreeItemBase']:
     """Returns the TreeItem model, set for the project."""
     return get_model_class('MODEL_TREE_ITEM')
+
+
+class DynamicItem(get_tree_item_model()):
+    is_dynamic = True
+
+    def __init__(
+            self, *args, access_by_perms=None, perms_mode_all=True, children=None, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.id = generate_id_for(self)
+        self._access_by_perms = access_by_perms
+        self.access_perm_type = (
+            self.PERM_TYPE_ALL if perms_mode_all else self.PERM_TYPE_ANY
+        )
+        self.access_restricted = bool(access_by_perms)
+
+        self.dynamic_children = children or []
+        for child in self.dynamic_children:
+            child.parent = self
+
+    @cached_property
+    def permissions(self):
+        return self.clean_permissions(self._access_by_perms)
+
+    @staticmethod
+    def clean_permission(permission: TypePermission) -> Union[int, Permission]:
+        if isinstance(permission, str):
+            # Get permission object from string
+            try:
+                app, codename = permission.split('.')
+            except ValueError:
+                raise ValueError(
+                    f'Wrong permission string format: supplied - `{permission}`; '
+                    'expected - `<app_name>.<permission_name>`.')
+            try:
+                return Permission.objects.get(codename=codename, content_type__app_label=app)
+            except Permission.DoesNotExist:
+                raise ValueError(f'Permission `{app}.{codename}` does not exist.')
+        elif not isinstance(permission, (int, Permission)):
+            raise ValueError('Permissions must be given as strings, ints, or `Permission` instances.')
+
+        return permission
+
+    def clean_permissions(self, permissions: Union[TypePermission, List[TypePermission]]) -> List[Permission]:
+        if permissions is None:
+            return []
+
+        # Make permissions a list if currently a single object
+        if not isinstance(permissions, list):
+            permissions = [permissions]
+
+        return [
+            self.clean_permission(permission)
+            for permission in permissions
+        ]
+
+    class Meta:
+        proxy = True
